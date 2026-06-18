@@ -12,7 +12,7 @@ from pathlib import Path
 import streamlit as st
 
 # ----------------------------------------------------------------------------- data
-st.set_page_config(page_title="PPL S2 Schedule", page_icon="🏸", layout="wide")
+st.set_page_config(page_title="PPL S2 Badminton Schedule", page_icon="🏸", layout="wide")
 DATA_PATH = Path(__file__).parent / "schedule_data.json"
 
 
@@ -37,19 +37,6 @@ DISC_ABBR = {"Women's": "W", "Men's": "M", "Mixed": "X"}
 
 def h(value):
     return escape("" if value is None else str(value), quote=True)
-
-
-def player_names(pair):
-    names = []
-    for name in str(pair or "").split(" + "):
-        clean_name = name.strip()
-        lower_name = clean_name.lower()
-        if not clean_name:
-            continue
-        if lower_name.startswith("group ") or "winner" in lower_name or "runner-up" in lower_name:
-            continue
-        names.append(clean_name)
-    return names
 
 # ----------------------------------------------------------------------------- styles
 st.markdown(
@@ -459,7 +446,6 @@ st.markdown(
 present_discs = {m["discipline"] for m in MATCHES}
 discs = [d for d in DISCIPLINE_ORDER if d in present_discs]
 discs += sorted(present_discs - set(discs))
-teams = sorted({t for m in MATCHES for t in (m["t1"], m["t2"]) if t})
 courts = sorted({m["court"] for m in MATCHES})
 pair_teams = sorted(
     {
@@ -485,21 +471,6 @@ with cc1:
         horizontal=True,
     )
 
-pair_options = get_pair_options(cat)
-
-with cc2:
-    pair_team = st.selectbox(
-        "Player Pair",
-        ["All pairs"] + pair_options,
-    )
-
-with cc3:
-    stage = st.radio(
-        "Stage",
-        ["All", "Group stage", "Quarterfinals"],
-        horizontal=True,
-    )
-
 def get_pair_options(selected_category):
     pairs = set()
 
@@ -518,18 +489,39 @@ def get_pair_options(selected_category):
 
     return sorted(pairs)
 
+pair_options = get_pair_options(cat)
+
+with cc2:
+    pair_team = st.selectbox(
+        "Player Pair",
+        ["All pairs"] + pair_options,
+    )
+
+with cc3:
+    stage = st.radio(
+        "Stage",
+        ["All", "Group stage", "Quarterfinals"],
+        horizontal=True,
+    )
+
 
 def keep(m):
     if cat != "All categories" and m["discipline"] != cat:
         return False
-    if team != "All teams" and team not in (m["t1"], m["t2"]):
-        return False
-    if pair_team != "All pairs" and pair_team not in (f"{m['p1']} ({m['t1']})", f"{m['p2']} ({m['t2']})"):
-        return False
+
+    if pair_team != "All pairs":
+        left_pair = f"{m['p1']} ({m['t1']})"
+        right_pair = f"{m['p2']} ({m['t2']})"
+
+        if pair_team not in (left_pair, right_pair):
+            return False
+
     if stage == "Group stage" and m["stage"] == "Quarterfinal":
         return False
+
     if stage == "Quarterfinals" and m["stage"] != "Quarterfinal":
         return False
+
     return True
 
 
@@ -581,17 +573,16 @@ def chip_html(m, highlight_team=None, highlight_player=None):
     tag = f"{DISC_ABBR.get(m['discipline'], '?')} {m['stage']}"
     c1 = TEAM_COLORS.get(m.get("t1"), "#94A3B8")
     c2 = TEAM_COLORS.get(m.get("t2"), "#94A3B8")
-    side_1_selected = (
-        (highlight_team and m.get("t1") == highlight_team)
-        or (highlight_player and highlight_player in player_names(m["p1"]))
-    )
-    side_2_selected = (
-        (highlight_team and m.get("t2") == highlight_team)
-        or (highlight_player and highlight_player in player_names(m["p2"]))
-    )
+    pair1 = f"{m['p1']} ({m['t1']})"
+    pair2 = f"{m['p2']} ({m['t2']})"
+
+    side_1_selected = (highlight_player and highlight_player == pair1)
+
+    side_2_selected = (highlight_player and highlight_player == pair2)
     selected_1 = " selected" if side_1_selected else ""
     selected_2 = " selected" if side_2_selected else ""
-    highlight = " highlight" if selected_1 or selected_2 else ""
+
+    highlight = " highlight" if side_1_selected or side_2_selected else ""
     return (
         f"<div class='chip{highlight}' style='--chip-accent:{h(accent)}; --chip-soft:{h(soft)};'>"
         f"<div class='tag'>{h(tag)}</div>"
@@ -605,8 +596,6 @@ def chip_html(m, highlight_team=None, highlight_player=None):
 
 sessions = total_sessions
 head = "All categories" if cat == "All categories" else f"{cat}"
-if team != "All teams":
-    head += f" - {team}"
 if pair_team != "All pairs":
     head += f" - {pair_team}"
 if stage != "All":
@@ -647,9 +636,11 @@ with tab_time:
                 )
                 inner = right.columns(min(len(ms), 3))
                 for i, m in enumerate(ms):
-                    hl = team if team != "All teams" else None
                     hp = pair_team if pair_team != "All pairs" else None
-                    inner[i % 3].markdown(chip_html(m, hl, hp), unsafe_allow_html=True)
+                    inner[i % 3].markdown(
+                        chip_html(m, highlight_player=hp),
+                        unsafe_allow_html=True,
+                    )
 
 # --- Court Grid -------------------------------------------------------------
 with tab_grid:
@@ -688,9 +679,8 @@ with tab_grid:
                 for idx, court_no in enumerate(grid_courts):
                     cell = next((m for m in rs if m["court"] == court_no and m["start"] == start), None)
                     if cell:
-                        hl = team if team != "All teams" else None
                         hp = pair_team if pair_team != "All pairs" else None
-                        cols[idx + 1].markdown(chip_html(cell, hl, hp), unsafe_allow_html=True)
+                        cols[idx + 1].markdown(chip_html(cell, highlight_player=hp), unsafe_allow_html=True)
                     else:
                         cols[idx + 1].markdown("<div class='empty'>Open</div>", unsafe_allow_html=True)
 
@@ -732,4 +722,4 @@ with tab_list:
             },
         )
 
-st.markdown("<div class='footer-note'>PPL Season 2 schedule viewer</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer-note'>PPL Season 2 - Badminton</div>", unsafe_allow_html=True)
