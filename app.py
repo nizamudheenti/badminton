@@ -476,17 +476,47 @@ pair_teams = sorted(
 )
 
 st.markdown("<div class='filter-label'>Filters</div>", unsafe_allow_html=True)
-cc1, cc2, cc3, cc4 = st.columns([1.35, 1, 1.35, 1])
+cc1, cc2, cc3 = st.columns([1.5, 1.8, 1])
+
 with cc1:
-    cat = st.radio("Category", ["All categories"] + discs, horizontal=True)
+    cat = st.radio(
+        "Category",
+        ["All categories"] + discs,
+        horizontal=True,
+    )
+
+pair_options = get_pair_options(cat)
+
 with cc2:
-    team = st.selectbox("Team", ["All teams"] + teams)
-with cc3:
     pair_team = st.selectbox(
-    "Player Pair",
-    ["All pairs"] + pair_teams)
-with cc4:
-    stage = st.radio("Stage", ["All", "Group stage", "Quarterfinals"], horizontal=True)
+        "Player Pair",
+        ["All pairs"] + pair_options,
+    )
+
+with cc3:
+    stage = st.radio(
+        "Stage",
+        ["All", "Group stage", "Quarterfinals"],
+        horizontal=True,
+    )
+
+def get_pair_options(selected_category):
+    pairs = set()
+
+    for m in MATCHES:
+        if (
+            selected_category != "All categories"
+            and m["discipline"] != selected_category
+        ):
+            continue
+
+        if m.get("p1") and m.get("t1"):
+            pairs.add(f"{m['p1']} ({m['t1']})")
+
+        if m.get("p2") and m.get("t2"):
+            pairs.add(f"{m['p2']} ({m['t2']})")
+
+    return sorted(pairs)
 
 
 def keep(m):
