@@ -461,12 +461,17 @@ discs = [d for d in DISCIPLINE_ORDER if d in present_discs]
 discs += sorted(present_discs - set(discs))
 teams = sorted({t for m in MATCHES for t in (m["t1"], m["t2"]) if t})
 courts = sorted({m["court"] for m in MATCHES})
-players = sorted(
+pair_teams = sorted(
     {
-        player
+        f"{m['p1']} ({m['t1']})"
         for m in MATCHES
-        for pair in (m["p1"], m["p2"])
-        for player in player_names(pair)
+        if m.get("p1") and m.get("t1")
+    }
+    |
+    {
+        f"{m['p2']} ({m['t2']})"
+        for m in MATCHES
+        if m.get("p2") and m.get("t2")
     }
 )
 
@@ -477,7 +482,9 @@ with cc1:
 with cc2:
     team = st.selectbox("Team", ["All teams"] + teams)
 with cc3:
-    player = st.selectbox("Player", ["All players"] + players)
+    pair_team = st.selectbox(
+    "Player Pair",
+    ["All pairs"] + pair_teams)
 with cc4:
     stage = st.radio("Stage", ["All", "Group stage", "Quarterfinals"], horizontal=True)
 
@@ -487,7 +494,7 @@ def keep(m):
         return False
     if team != "All teams" and team not in (m["t1"], m["t2"]):
         return False
-    if player != "All players" and player not in player_names(m["p1"]) + player_names(m["p2"]):
+    if pair_team != "All pairs" and pair_team not in (f"{m['p1']} ({m['t1']})", f"{m['p2']} ({m['t2']})"):
         return False
     if stage == "Group stage" and m["stage"] == "Quarterfinal":
         return False
@@ -570,8 +577,8 @@ sessions = total_sessions
 head = "All categories" if cat == "All categories" else f"{cat}"
 if team != "All teams":
     head += f" - {team}"
-if player != "All players":
-    head += f" - {player}"
+if pair_team != "All pairs":
+    head += f" - {pair_team}"
 if stage != "All":
     head += f" - {stage}"
 
@@ -611,7 +618,7 @@ with tab_time:
                 inner = right.columns(min(len(ms), 3))
                 for i, m in enumerate(ms):
                     hl = team if team != "All teams" else None
-                    hp = player if player != "All players" else None
+                    hp = pair_team if pair_team != "All pairs" else None
                     inner[i % 3].markdown(chip_html(m, hl, hp), unsafe_allow_html=True)
 
 # --- Court Grid -------------------------------------------------------------
@@ -652,7 +659,7 @@ with tab_grid:
                     cell = next((m for m in rs if m["court"] == court_no and m["start"] == start), None)
                     if cell:
                         hl = team if team != "All teams" else None
-                        hp = player if player != "All players" else None
+                        hp = pair_team if pair_team != "All pairs" else None
                         cols[idx + 1].markdown(chip_html(cell, hl, hp), unsafe_allow_html=True)
                     else:
                         cols[idx + 1].markdown("<div class='empty'>Open</div>", unsafe_allow_html=True)
