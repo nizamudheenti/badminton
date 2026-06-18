@@ -601,7 +601,9 @@ if pair_team != "All pairs":
 if stage != "All":
     head += f" - {stage}"
 
-tab_time, tab_grid, tab_list = st.tabs(["Timings", "Court Grid", "List"])
+tab_time, tab_grid, tab_list, tab_rules = st.tabs(
+    ["Timings", "Court Grid", "List", "Rules"]
+)
 
 # --- Timings (category + team focused) --------------------------------------
 with tab_time:
@@ -721,5 +723,142 @@ with tab_list:
                 "Teams": st.column_config.TextColumn("Teams", width="medium"),
             },
         )
+# --- Rules ------------------------------------------------------------------
+with tab_rules:
+    st.markdown(
+        """
+# PPL Season 2 – Tournament Rules & Regulations
 
+## 1. Tournament Format
+
+The tournament consists of two stages:
+
+* Group Stage
+* Knockout Stage
+
+All teams must adhere to the rules and regulations outlined below.
+
+
+## 2. Group Stage
+
+1. Teams will compete in a round-robin format within their respective groups.
+2. Each team will play every other team in its group once.
+3. All Group Stage matches will be played as a **single set to 21 points**.
+4. Rally scoring will be used throughout the tournament.
+
+
+## 3. Qualification for Knockout Stages
+
+### Men's Division
+
+1. The Men's Division consists of **4 groups**.
+2. The **top 2 teams** from each group will qualify for the Quarter-Finals.
+3. A total of **8 teams** will advance to the Knockout Stage.
+
+### Women's Division
+
+1. The Women's Division consists of **1 group with 5 teams**.
+2. Each team will play every other team once.
+3. The team finishing **1st** in the standings will qualify directly for the **Final**.
+4. The teams finishing **2nd** and **3rd** will compete in a **Semi-Final**.
+5. The winner of the Semi-Final will advance to the **Final**.
+6. Teams finishing **4th** and **5th** will be eliminated.
+
+### Mixed Division
+
+1. The Mixed Division consists of **2 groups**.
+2. The **top 2 teams** from each group will qualify for the Semi-Finals.
+3. Semi-Final winners will advance to the Final.
+
+
+## 4. Knockout Stage
+
+### Men's Division
+
+* Quarter-Finals
+* Semi-Finals
+* Final
+
+### Women's Division
+
+* Semi-Final (2nd vs 3rd)
+* Final (1st vs Semi-Final Winner)
+
+### Mixed Division
+
+* Semi-Finals
+* Final
+
+All Knockout Stage matches will be played as **Best of 3 sets to 21 points**.
+
+
+## 5. Scoring System
+
+1. Rally scoring shall be used throughout the tournament.
+2. A point is awarded on every rally, regardless of which side served.
+3. A set is won by the first team to reach **21 points** with a minimum lead of **2 points**.
+4. If the score reaches **20–20**, play shall continue until one team gains a 2-point advantage.
+5. If the score reaches **29–29**, the next point shall decide the set.
+6. In Knockout Stage matches, the first team to win **2 sets** wins the match.
+
+
+## 6. Service Rules
+
+1. The initial service shall be decided by a coin toss.
+2. The serve must be delivered underhand, with the shuttle struck below the server's waist.
+3. Both feet of the server must remain in contact with the court surface until the shuttle is struck.
+4. Deliberate distractions, excessive movements, or actions intended to interfere with an opponent's readiness may be deemed faults.
+5. Standard badminton service rules shall apply unless otherwise specified by the Tournament Committee.
+
+
+## 7. Tie-Breaking Criteria
+
+If two or more teams finish the Group Stage with an equal number of points, rankings shall be determined in the following order:
+
+1. **Head-to-Head Result**
+2. **Points Difference** (Points Scored − Points Conceded)
+3. **Total Points Scored**
+4. **Lowest Points Conceded**
+
+The Tournament Committee's decision shall be final if teams remain tied after all criteria have been applied.
+
+
+## 8. Match Attendance & Walkovers
+
+1. All matches will begin strictly according to the published schedule.
+2. Players must report and be ready to play at least **20 minutes before** their scheduled match time.
+3. Failure to report on time may result in a **walkover**.
+4. Any exceptional circumstances must be communicated to the Tournament Committee immediately.
+
+---
+
+## 9. Player Conduct & Sportsmanship
+
+1. Players are expected to display good sportsmanship at all times.
+2. Respect must be shown to opponents, officials, volunteers, and spectators.
+3. Unsporting conduct, abusive language, or inappropriate behavior may result in warnings, penalties, or disqualification.
+4. Any disputes should be raised through the Team Captain or Tournament Committee.
+
+---
+
+## 10. Safety & Equipment
+
+1. Players must wear appropriate badminton attire and non-marking sports footwear.
+2. Players participate at their own risk and are responsible for ensuring they are physically fit to compete.
+3. Any injury sustained during the tournament must be reported immediately to the Tournament Committee.
+4. The Tournament Committee reserves the right to stop or postpone a match if player safety is at risk.
+
+---
+
+## 11. General Regulations
+
+1. Standard Badminton World Federation (BWF) rules shall apply unless specifically modified by these tournament regulations.
+2. The Tournament Committee reserves the right to interpret, amend, and enforce these rules whenever necessary.
+3. Any decision made by the Tournament Committee shall be final and binding.
+4. Participation in the tournament constitutes acceptance of all tournament rules and regulations.
+
+---
+
+### 🏸 Play Fair • Play Hard • Enjoy the Tournament"""
+    )
 st.markdown("<div class='footer-note'>PPL Season 2 - Badminton</div>", unsafe_allow_html=True)
