@@ -4,8 +4,8 @@ Run locally:   streamlit run app.py
 Deploy:        push app.py + schedule_data.json + requirements.txt to a repo,
                then deploy on https://share.streamlit.io
 """
-import io
 import json
+import re
 from collections import OrderedDict
 from html import escape
 from pathlib import Path
@@ -35,6 +35,7 @@ TEAM_COLORS = DATA["team_colors"]
 DISCIPLINE_ORDER = ["Women's", "Men's", "Mixed"]
 DISC_ACCENT = {"Women's": "#C43B73", "Men's": "#2563EB", "Mixed": "#15803D"}
 DISC_ABBR = {"Women's": "W", "Men's": "M", "Mixed": "X"}
+KNOCKOUT_STAGES = {"Quarterfinal", "Semifinal", "Final"}
 
 
 def h(value):
@@ -44,13 +45,9 @@ def h(value):
 SCORE_XLSX = Path(__file__).parent / "scores.xlsx"
 SCORE_CSV = Path(__file__).parent / "scores.csv"
 
-# Columns written to / read from the score sheet. The first block is read-only
-# context so you know which match each row is; the SET_COLS are the ones you edit.
-REF_COLS = [
-    "match_id", "Day", "Time", "Court", "Category", "Stage",
-    "Pair 1", "Team 1", "Pair 2", "Team 2",
-]
-SET_COLS = ["P1 S1", "P2 S1", "P1 S2", "P2 S2", "P1 S3", "P2 S3"]
+# scores.xlsx columns: match_id (the key — don't change it) plus the editable
+# score cells P1 S1/P2 S1 .. P1 S3/P2 S3 (set 1 for group play, sets 2-3 for
+# best-of-3 knockouts). Other columns are just context.
 
 
 def _as_int(value):
@@ -69,35 +66,6 @@ def _as_int(value):
         return int(float(s))
     except (TypeError, ValueError):
         return None
-
-
-def build_template_df():
-    """One row per match with empty score columns, ready to fill in Excel."""
-    rows = []
-    for m in sorted(MATCHES, key=lambda x: (x["day"], x["start"], x["court"])):
-        row = {
-            "match_id": m["id"],
-            "Day": m["day"],
-            "Time": f"{m['start_str']} - {m['end_str']}",
-            "Court": m["court"],
-            "Category": m["discipline"],
-            "Stage": m["stage"],
-            "Pair 1": m.get("p1"),
-            "Team 1": m.get("t1"),
-            "Pair 2": m.get("p2"),
-            "Team 2": m.get("t2"),
-        }
-        for col in SET_COLS:
-            row[col] = None
-        rows.append(row)
-    return pd.DataFrame(rows, columns=REF_COLS + SET_COLS)
-
-
-def template_xlsx_bytes():
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        build_template_df().to_excel(writer, index=False, sheet_name="Scores")
-    return buf.getvalue()
 
 
 def parse_scores(df):
@@ -225,6 +193,121 @@ def group_standings(discipline, stage, scores):
         s["pd"] = s["pf"] - s["pa"]
     return ordered
 
+
+def resolve_bracket(scores):
+    """Fill knockout placeholders from results, in dependency order.
+
+    Groups complete -> QF / Women's SF participants (from standings).
+    QFs complete    -> Semifinal participants (QF winners).
+    Semis complete  -> Final participants (SF winners).
+
+    Returns {match_id: {"p1","t1","p2","t2"}} with real pairs where known
+    and the original placeholder text where not yet decided.
+    """
+    by_id = {m["id"]: m for m in MATCHES}
+    eff = {
+        m["id"]: {"p1": m["p1"], "t1": m.get("t1"), "p2": m["p2"], "t2": m.get("t2")}
+        for m in MATCHES
+    }
+    # which sides hold a real (decided) pair — group/crossover are real upfront
+    done = {
+        m["id"]: {"p1": m["stage"] not in KNOCKOUT_STAGES,
+                  "p2": m["stage"] not in KNOCKOUT_STAGES}
+        for m in MATCHES
+    }
+
+    def set_side(mid, side, pair, team):
+        eff[mid][side] = pair
+        eff[mid]["t1" if side == "p1" else "t2"] = team
+        done[mid][side] = True
+
+    # group standings only when every match in that group is scored
+    pos = {}  # (discipline, group) -> {rank: (pair, team)}
+    for disc in {m["discipline"] for m in MATCHES}:
+        groups = {
+            m["stage"] for m in MATCHES
+            if m["discipline"] == disc and str(m["stage"]).startswith("Group")
+        }
+        for grp in groups:
+            gm = [m for m in MATCHES if m["discipline"] == disc and m["stage"] == grp]
+            if gm and all(match_result(m, scores)["played"] for m in gm):
+                table = group_standings(disc, grp, scores)
+                pos[(disc, grp)] = {s["rank"]: (s["pair"], s["team"]) for s in table}
+
+    def resolve_group_ref(disc, text):
+        mt = re.match(r"Group (\w+)", str(text))
+        if not mt:
+            return None
+        table = pos.get((disc, "Group " + mt.group(1)))
+        if not table:
+            return None
+        if "3rd" in text:
+            rank = 3
+        elif "Runner-up" in text or "2nd" in text:
+            rank = 2
+        elif "Winner" in text or "1st" in text:
+            rank = 1
+        else:
+            return None
+        return table.get(rank)
+
+    def ordered(disc, stage_name):
+        return sorted(
+            (m for m in MATCHES if m["discipline"] == disc and m["stage"] == stage_name),
+            key=lambda x: (x["start"], x["court"]),
+        )
+
+    def winner_of(mid):
+        d = done[mid]
+        if not (d["p1"] and d["p2"]):
+            return None
+        r = match_result(by_id[mid], scores)
+        if not r["played"] or r["winner"] is None:
+            return None
+        side = r["winner"]
+        e = eff[mid]
+        return (e[side], e["t1" if side == "p1" else "t2"])
+
+    # 1) group-based participants: QFs and the Women's SF / Final (1st seed)
+    for m in MATCHES:
+        if m["stage"] not in KNOCKOUT_STAGES:
+            continue
+        for side in ("p1", "p2"):
+            ref = resolve_group_ref(m["discipline"], m[side])
+            if ref:
+                set_side(m["id"], side, ref[0], ref[1])
+
+    # 2) semifinal participants from QF winners
+    for m in MATCHES:
+        if m["stage"] != "Semifinal":
+            continue
+        qfs = ordered(m["discipline"], "Quarterfinal")
+        for side in ("p1", "p2"):
+            mt = re.match(r"Winner QF(\d+)", str(m[side]))
+            if mt and 1 <= int(mt.group(1)) <= len(qfs):
+                w = winner_of(qfs[int(mt.group(1)) - 1]["id"])
+                if w:
+                    set_side(m["id"], side, w[0], w[1])
+
+    # 3) final participants from SF winners (and Women's "Winner of Semifinal")
+    for m in MATCHES:
+        if m["stage"] != "Final":
+            continue
+        sfs = ordered(m["discipline"], "Semifinal")
+        for side in ("p1", "p2"):
+            text = str(m[side])
+            mt = re.match(r"Winner SF(\d+)", text)
+            if mt and 1 <= int(mt.group(1)) <= len(sfs):
+                w = winner_of(sfs[int(mt.group(1)) - 1]["id"])
+                if w:
+                    set_side(m["id"], side, w[0], w[1])
+            elif text == "Winner of Semifinal" and sfs:
+                w = winner_of(sfs[0]["id"])
+                if w:
+                    set_side(m["id"], side, w[0], w[1])
+
+    return eff
+
 # ----------------------------------------------------------------------------- styles
 st.markdown(
     """
@@ -259,8 +342,11 @@ st.markdown(
 
       div[data-testid="stRadio"] > label,
       div[data-testid="stSelectbox"] > label {
-        color: var(--ink);
-        font-weight: 700;
+        color: var(--accent-strong);
+        font-size: 0.74rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
       }
 
       .stRadio [role="radiogroup"] {
@@ -272,6 +358,18 @@ st.markdown(
         border: 1px solid var(--line);
         border-radius: 8px;
         padding: 0.35rem 0.55rem;
+      }
+
+      /* dropdown control */
+      div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 4px 14px rgba(16, 32, 28, 0.05);
+      }
+
+      div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:hover {
+        border-color: var(--accent);
       }
 
       .hero {
@@ -593,7 +691,10 @@ st.markdown(
       }
 
       .stTabs [data-baseweb="tab-list"] {
+        display: flex;
+        flex-wrap: wrap;
         gap: 0.45rem;
+        width: 100%;
       }
 
       .stTabs [data-baseweb="tab"] {
@@ -601,8 +702,13 @@ st.markdown(
         border: 1px solid var(--line);
         border-radius: 8px;
         color: var(--ink);
+        flex: 1 1 auto;
         font-weight: 800;
-        padding: 0.45rem 0.85rem;
+        justify-content: center;
+        min-width: max-content;
+        padding: 0.45rem clamp(0.5rem, 2vw, 1rem);
+        text-align: center;
+        white-space: nowrap;
       }
 
       .footer-note {
@@ -632,6 +738,17 @@ st.markdown(
           flex-direction: column;
           gap: 0.45rem;
         }
+
+        .stTabs [data-baseweb="tab-list"] {
+          gap: 0.3rem;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+          flex: 1 1 40%;
+          font-size: 0.82rem;
+          min-width: 0;
+          padding: 0.4rem 0.5rem;
+        }
       }
     </style>
     """,
@@ -639,8 +756,6 @@ st.markdown(
 )
 
 total_sessions = list(OrderedDict.fromkeys((m["day"], m["session"]) for m in MATCHES))
-total_start = min(MATCHES, key=lambda m: m["start"])["start_str"]
-total_end = max(MATCHES, key=lambda m: m["end"])["end_str"]
 
 st.markdown(
     (
@@ -649,11 +764,6 @@ st.markdown(
         "<div class='eyebrow'>Schedule viewer</div>"
         f"<h1>{h(DATA['title'])}</h1>"
         f"<p>{h(DATA['subtitle'])} &middot; {h(len(MATCHES))} scheduled matches</p>"
-        "</div>"
-        "<div class='hero-meta'>"
-        f"<div class='meta-pill'><span class='meta-label'>Courts</span><span class='meta-value'>{h(DATA['courts'])}</span></div>"
-        f"<div class='meta-pill'><span class='meta-label'>Sessions</span><span class='meta-value'>{h(len(total_sessions))}</span></div>"
-        f"<div class='meta-pill'><span class='meta-label'>Window</span><span class='meta-value'>{h(total_start)} - {h(total_end)}</span></div>"
         "</div>"
         "</div>"
     ),
@@ -680,13 +790,12 @@ pair_teams = sorted(
 )
 
 st.markdown("<div class='filter-label'>Filters</div>", unsafe_allow_html=True)
-cc1, cc2, cc3 = st.columns([1.5, 1.8, 1])
+cc1, cc2, cc3 = st.columns([1, 2, 1])
 
 with cc1:
-    cat = st.radio(
+    cat = st.selectbox(
         "Category",
         ["All categories"] + discs,
-        horizontal=True,
     )
 
 def get_pair_options(selected_category):
@@ -716,10 +825,9 @@ with cc2:
     )
 
 with cc3:
-    stage = st.radio(
+    stage = st.selectbox(
         "Stage",
-        ["All", "Group stage", "Quarterfinals"],
-        horizontal=True,
+        ["All", "Group stage", "Quarterfinals", "Semifinals", "Finals"],
     )
 
 
@@ -734,10 +842,16 @@ def keep(m):
         if pair_team not in (left_pair, right_pair):
             return False
 
-    if stage == "Group stage" and m["stage"] == "Quarterfinal":
+    if stage == "Group stage" and m["stage"] in KNOCKOUT_STAGES:
         return False
 
     if stage == "Quarterfinals" and m["stage"] != "Quarterfinal":
+        return False
+
+    if stage == "Semifinals" and m["stage"] != "Semifinal":
+        return False
+
+    if stage == "Finals" and m["stage"] != "Final":
         return False
 
     return True
@@ -767,15 +881,15 @@ def legend_html():
 
 view_window = f"{view[0]['start_str']} - {view[-1]['end_str']}" if view else "None"
 active_courts = len({m["court"] for m in view}) if view else 0
-group_count = sum(1 for m in view if m["stage"] != "Quarterfinal")
-qf_count = sum(1 for m in view if m["stage"] == "Quarterfinal")
+group_count = sum(1 for m in view if m["stage"] not in KNOCKOUT_STAGES)
+qf_count = sum(1 for m in view if m["stage"] in KNOCKOUT_STAGES)
 
 st.markdown(
     (
         "<div class='summary-grid'>"
         f"{stat_card('Matches shown', len(view), f'{len(MATCHES)} total scheduled')}"
         f"{stat_card('Group stage', group_count, 'Filtered group matches')}"
-        f"{stat_card('Quarterfinals', qf_count, 'Filtered knockout matches')}"
+        f"{stat_card('Knockouts', qf_count, 'QF, semis & finals')}"
         f"{stat_card('Active courts', active_courts, view_window)}"
         "</div>"
     ),
@@ -832,15 +946,32 @@ if pair_team != "All pairs":
 if stage != "All":
     head += f" - {stage}"
 
-# Resolve the active score source: an uploaded file takes priority for this
-# session, otherwise read scores.xlsx / scores.csv sitting next to app.py.
-SCORES = st.session_state.get("uploaded_scores")
-if SCORES is None:
-    SCORES = load_scores()
+# Scores come from scores.xlsx / scores.csv sitting next to app.py. The
+# Standings tab only appears once such a file exists.
+SCORES = load_scores()
+HAS_SCORES = SCORE_XLSX.exists() or SCORE_CSV.exists()
 
-tab_time, tab_grid, tab_list, tab_stand, tab_rules = st.tabs(
-    ["Timings", "Court Grid", "List", "Standings", "Rules"]
-)
+# Auto-advance knockout placeholders (group winners, QF/SF winners) from scores.
+EFF = resolve_bracket(SCORES)
+
+
+def eff_match(m):
+    """A copy of the match with knockout participants resolved from results."""
+    e = EFF[m["id"]]
+    return {**m, "p1": e["p1"], "t1": e["t1"], "p2": e["p2"], "t2": e["t2"]}
+
+tab_labels = ["Timings", "Court Grid"]
+if HAS_SCORES:
+    tab_labels.append("Results")
+    tab_labels.append("Standings")
+tab_labels.append("Rules")
+
+_tabs = dict(zip(tab_labels, st.tabs(tab_labels)))
+tab_time = _tabs["Timings"]
+tab_grid = _tabs["Court Grid"]
+tab_rules = _tabs["Rules"]
+tab_results = _tabs.get("Results")
+tab_stand = _tabs.get("Standings")
 
 # --- Timings (category + team focused) --------------------------------------
 with tab_time:
@@ -877,7 +1008,7 @@ with tab_time:
                 for i, m in enumerate(ms):
                     hp = pair_team if pair_team != "All pairs" else None
                     inner[i % 3].markdown(
-                        chip_html(m, highlight_player=hp, result=match_result(m, SCORES)),
+                        chip_html(eff_match(m), highlight_player=hp, result=match_result(m, SCORES)),
                         unsafe_allow_html=True,
                     )
 
@@ -920,186 +1051,117 @@ with tab_grid:
                     if cell:
                         hp = pair_team if pair_team != "All pairs" else None
                         cols[idx + 1].markdown(
-                            chip_html(cell, highlight_player=hp, result=match_result(cell, SCORES)),
+                            chip_html(eff_match(cell), highlight_player=hp, result=match_result(cell, SCORES)),
                             unsafe_allow_html=True,
                         )
                     else:
                         cols[idx + 1].markdown("<div class='empty'>Open</div>", unsafe_allow_html=True)
 
-# --- List -------------------------------------------------------------------
-with tab_list:
-    st.markdown(
-        (
-            "<div class='view-title'>"
-            f"<h3>{h(head)}</h3>"
-            f"<span class='match-count'>{h(len(view))} matches</span>"
-            "</div>"
-        ),
-        unsafe_allow_html=True,
-    )
-    if not view:
-        st.info("No matches for the selected filters.")
-    else:
-        def list_row(m):
-            res = match_result(m, SCORES)
-            if res["played"]:
-                if res["winner"] == "p1":
-                    won = f"{m['p1']}"
-                elif res["winner"] == "p2":
-                    won = f"{m['p2']}"
-                else:
-                    won = "Tie"
-                score = res["score_str"]
-            else:
-                won = ""
-                score = "—"
-            return {
-                "Day": m["day"],
-                "Session": m["session"],
-                "Time": f"{m['start_str']} - {m['end_str']}",
-                "Court": f"Court {m['court']}",
-                "Category": m["discipline"],
-                "Stage": m["stage"],
-                "Match": f"{m['p1']} vs {m['p2']}",
-                "Teams": f"{m.get('t1') or 'TBD'} / {m.get('t2') or 'TBD'}",
-                "Score": score,
-                "Winner": won,
-            }
-
-        rows = [list_row(m) for m in view]
-        st.dataframe(
-            rows,
-            width="stretch",
-            hide_index=True,
-            height=min(720, 38 * (len(rows) + 1)),
-            column_config={
-                "Match": st.column_config.TextColumn("Match", width="large"),
-                "Teams": st.column_config.TextColumn("Teams", width="medium"),
-                "Score": st.column_config.TextColumn("Score", width="small"),
-                "Winner": st.column_config.TextColumn("Winner", width="medium"),
-            },
-        )
-# --- Standings --------------------------------------------------------------
-with tab_stand:
-    st.markdown(
-        (
-            "<div class='view-title'>"
-            "<h3>Group Standings</h3>"
-            f"<span class='match-count'>{h(len(SCORES))} matches scored</span>"
-            "</div>"
-        ),
-        unsafe_allow_html=True,
-    )
-
-    with st.expander("How to update scores", expanded=not SCORES):
+# --- Results (only matches that have a recorded score) ----------------------
+if tab_results is not None:
+    with tab_results:
+        played = [(m, match_result(m, SCORES)) for m in view]
+        played = [(m, r) for m, r in played if r["played"]]
         st.markdown(
-            "1. **Download** the score sheet below — one row per match.\n"
-            "2. Fill in the set scores in Excel: `P1 S1`/`P2 S1` for the single "
-            "group set (use `S2`/`S3` columns too for best-of-3 knockouts).\n"
-            "3. Save it as **`scores.xlsx`** next to `app.py` (or upload it below "
-            "for a quick preview). For the deployed site, commit `scores.xlsx` "
-            "to the repo.\n"
-            "4. Standings, the **Score** column and the match cards update "
-            "automatically. Don't change the `match_id` column."
-        )
-        dl1, dl2 = st.columns(2)
-        dl1.download_button(
-            "⬇ Download score sheet (Excel)",
-            data=template_xlsx_bytes(),
-            file_name="scores.xlsx",
-            mime="application/vnd.openpyxlformats-officedocument.spreadsheetml.sheet",
-            width="stretch",
-        )
-        dl2.download_button(
-            "⬇ Download score sheet (CSV)",
-            data=build_template_df().to_csv(index=False).encode("utf-8"),
-            file_name="scores.csv",
-            mime="text/csv",
-            width="stretch",
-        )
-
-        up = st.file_uploader(
-            "Preview a filled score sheet (.xlsx or .csv)", type=["xlsx", "csv"]
-        )
-        if up is not None:
-            try:
-                df_up = (
-                    pd.read_csv(up)
-                    if up.name.lower().endswith(".csv")
-                    else pd.read_excel(up, sheet_name=0)
-                )
-                st.session_state["uploaded_scores"] = parse_scores(df_up)
-                st.success(f"Loaded {up.name}. Showing scores from this file.")
-                st.rerun()
-            except Exception as e:  # noqa: BLE001
-                st.error(f"Could not read that file: {e}")
-        if st.session_state.get("uploaded_scores") is not None:
-            if st.button("Clear preview / use scores.xlsx on disk"):
-                del st.session_state["uploaded_scores"]
-                st.rerun()
-
-    if not SCORES:
-        st.info(
-            "No scores recorded yet. Download the score sheet above, fill it in, "
-            "and save it as scores.xlsx next to app.py."
-        )
-
-    # Standings per discipline -> per group (round-robin groups only).
-    GROUP_RANK = {"Group W": 0, "Group A": 1, "Group B": 2, "Group C": 3, "Group D": 4}
-    for disc in discs:
-        groups = sorted(
-            {
-                m["stage"]
-                for m in MATCHES
-                if m["discipline"] == disc and str(m["stage"]).startswith("Group")
-            },
-            key=lambda g: GROUP_RANK.get(g, 99),
-        )
-        if not groups:
-            continue
-        st.markdown(
-            f"<div class='sess-head'><small>Category</small>{h(disc)}</div>",
+            (
+                "<div class='view-title'>"
+                f"<h3>{h(head)}</h3>"
+                f"<span class='match-count'>{h(len(played))} results</span>"
+                "</div>"
+            ),
             unsafe_allow_html=True,
         )
-        cols = st.columns(min(len(groups), 2))
-        for gi, grp in enumerate(groups):
-            table = group_standings(disc, grp, SCORES)
-            target = cols[gi % len(cols)]
-            with target:
-                st.markdown(f"**{h(grp)}**")
-                if not table:
-                    st.caption("No pairs found for this group.")
-                    continue
-                rows = [
-                    {
-                        "#": s["rank"],
-                        "Pair": s["pair"],
-                        "Team": s["team"],
-                        "P": s["played"],
-                        "W": s["won"],
-                        "L": s["lost"],
-                        "PF": s["pf"],
-                        "PA": s["pa"],
-                        "PD": s["pd"],
-                        "Pts": s["pts"],
-                    }
-                    for s in table
+        if not played:
+            st.info("No results recorded yet for the selected filters.")
+        else:
+            for (day, session) in sessions:
+                rs = [
+                    (m, r) for m, r in played
+                    if m["day"] == day and m["session"] == session
                 ]
-                st.dataframe(
-                    rows,
-                    width="stretch",
-                    hide_index=True,
-                    column_config={
-                        "#": st.column_config.NumberColumn("#", width="small"),
-                        "Pair": st.column_config.TextColumn("Pair", width="large"),
-                        "Team": st.column_config.TextColumn("Team", width="small"),
-                    },
+                if not rs:
+                    continue
+                st.markdown(
+                    f"<div class='sess-head'><small>Day {h(day)}</small>{h(session)}<small>{h(len(rs))} results</small></div>",
+                    unsafe_allow_html=True,
                 )
-    st.caption(
-        "P played · W won · L lost · PF points for · PA points against · "
-        "PD point difference · Pts = 2 per win. Ties broken by head-to-head "
-        "(2-way), then point difference, points for, then fewest conceded."
-    )
+                cols = st.columns(3)
+                for i, (m, r) in enumerate(rs):
+                    hp = pair_team if pair_team != "All pairs" else None
+                    cols[i % 3].markdown(
+                        chip_html(eff_match(m), highlight_player=hp, result=r),
+                        unsafe_allow_html=True,
+                    )
+
+# --- Standings (only shown when a scores file exists) -----------------------
+if tab_stand is not None:
+    with tab_stand:
+        st.markdown(
+            (
+                "<div class='view-title'>"
+                "<h3>Group Standings</h3>"
+                f"<span class='match-count'>{h(len(SCORES))} matches scored</span>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+
+        # Standings per discipline -> per group (round-robin groups only).
+        GROUP_RANK = {"Group W": 0, "Group A": 1, "Group B": 2, "Group C": 3, "Group D": 4}
+        for disc in discs:
+            groups = sorted(
+                {
+                    m["stage"]
+                    for m in MATCHES
+                    if m["discipline"] == disc and str(m["stage"]).startswith("Group")
+                },
+                key=lambda g: GROUP_RANK.get(g, 99),
+            )
+            if not groups:
+                continue
+            st.markdown(
+                f"<div class='sess-head'><small>Category</small>{h(disc)}</div>",
+                unsafe_allow_html=True,
+            )
+            cols = st.columns(min(len(groups), 2))
+            for gi, grp in enumerate(groups):
+                table = group_standings(disc, grp, SCORES)
+                target = cols[gi % len(cols)]
+                with target:
+                    st.markdown(f"**{h(grp)}**")
+                    if not table:
+                        st.caption("No pairs found for this group.")
+                        continue
+                    rows = [
+                        {
+                            "#": s["rank"],
+                            "Pair": s["pair"],
+                            "Team": s["team"],
+                            "P": s["played"],
+                            "W": s["won"],
+                            "L": s["lost"],
+                            "PF": s["pf"],
+                            "PA": s["pa"],
+                            "PD": s["pd"],
+                            "Pts": s["pts"],
+                        }
+                        for s in table
+                    ]
+                    st.dataframe(
+                        rows,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "#": st.column_config.NumberColumn("#", width="small"),
+                            "Pair": st.column_config.TextColumn("Pair", width="large"),
+                            "Team": st.column_config.TextColumn("Team", width="small"),
+                        },
+                    )
+        st.caption(
+            "P played · W won · L lost · PF points for · PA points against · "
+            "PD point difference · Pts = 2 per win. Ties broken by head-to-head "
+            "(2-way), then point difference, points for, then fewest conceded."
+        )
 
 # --- Rules ------------------------------------------------------------------
 with tab_rules:
