@@ -4,11 +4,13 @@ Run locally:   streamlit run app.py
 Deploy:        push app.py + schedule_data.json + requirements.txt to a repo,
                then deploy on https://share.streamlit.io
 """
+import io
 import json
 from collections import OrderedDict
 from html import escape
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 # ----------------------------------------------------------------------------- data
@@ -37,6 +39,191 @@ DISC_ABBR = {"Women's": "W", "Men's": "M", "Mixed": "X"}
 
 def h(value):
     return escape("" if value is None else str(value), quote=True)
+
+# ----------------------------------------------------------------------------- scores
+SCORE_XLSX = Path(__file__).parent / "scores.xlsx"
+SCORE_CSV = Path(__file__).parent / "scores.csv"
+
+# Columns written to / read from the score sheet. The first block is read-only
+# context so you know which match each row is; the SET_COLS are the ones you edit.
+REF_COLS = [
+    "match_id", "Day", "Time", "Court", "Category", "Stage",
+    "Pair 1", "Team 1", "Pair 2", "Team 2",
+]
+SET_COLS = ["P1 S1", "P2 S1", "P1 S2", "P2 S2", "P1 S3", "P2 S3"]
+
+
+def _as_int(value):
+    """Best-effort int from a spreadsheet cell; blank/garbage -> None."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, float) and pd.isna(value):
+            return None
+    except Exception:  # noqa: BLE001
+        pass
+    s = str(value).strip()
+    if s == "" or s.lower() in ("nan", "none"):
+        return None
+    try:
+        return int(float(s))
+    except (TypeError, ValueError):
+        return None
+
+
+def build_template_df():
+    """One row per match with empty score columns, ready to fill in Excel."""
+    rows = []
+    for m in sorted(MATCHES, key=lambda x: (x["day"], x["start"], x["court"])):
+        row = {
+            "match_id": m["id"],
+            "Day": m["day"],
+            "Time": f"{m['start_str']} - {m['end_str']}",
+            "Court": m["court"],
+            "Category": m["discipline"],
+            "Stage": m["stage"],
+            "Pair 1": m.get("p1"),
+            "Team 1": m.get("t1"),
+            "Pair 2": m.get("p2"),
+            "Team 2": m.get("t2"),
+        }
+        for col in SET_COLS:
+            row[col] = None
+        rows.append(row)
+    return pd.DataFrame(rows, columns=REF_COLS + SET_COLS)
+
+
+def template_xlsx_bytes():
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        build_template_df().to_excel(writer, index=False, sheet_name="Scores")
+    return buf.getvalue()
+
+
+def parse_scores(df):
+    """DataFrame (from xlsx/csv) -> {match_id: [(p1,p2), ...] per played set}."""
+    out = {}
+    if df is None or df.empty or "match_id" not in df.columns:
+        return out
+    for _, r in df.iterrows():
+        mid = _as_int(r.get("match_id"))
+        if mid is None:
+            continue
+        sets = []
+        for i in (1, 2, 3):
+            a = _as_int(r.get(f"P1 S{i}"))
+            b = _as_int(r.get(f"P2 S{i}"))
+            if a is not None and b is not None:
+                sets.append((a, b))
+        if sets:
+            out[mid] = sets
+    return out
+
+
+def load_scores():
+    """Read scores from scores.xlsx (preferred) or scores.csv if present."""
+    try:
+        if SCORE_XLSX.exists():
+            return parse_scores(pd.read_excel(SCORE_XLSX, sheet_name=0))
+        if SCORE_CSV.exists():
+            return parse_scores(pd.read_csv(SCORE_CSV))
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Could not read score file: {e}")
+    return {}
+
+
+def match_result(m, scores):
+    """Compute the outcome of one match from its recorded sets."""
+    sets = scores.get(m["id"])
+    if not sets:
+        return {"played": False}
+    pf1 = sum(a for a, b in sets)
+    pf2 = sum(b for a, b in sets)
+    w1 = sum(1 for a, b in sets if a > b)
+    w2 = sum(1 for a, b in sets if b > a)
+    winner = "p1" if w1 > w2 else "p2" if w2 > w1 else None
+    return {
+        "played": True,
+        "sets": sets,
+        "pf1": pf1, "pf2": pf2,
+        "w1": w1, "w2": w2,
+        "winner": winner,
+        "score_str": ", ".join(f"{a}-{b}" for a, b in sets),
+    }
+
+
+def group_standings(discipline, stage, scores):
+    """Build a ranked standings table for one (discipline, group)."""
+    matches = [
+        m for m in MATCHES
+        if m["discipline"] == discipline and m["stage"] == stage
+    ]
+    stats = OrderedDict()  # pair label -> stat dict
+
+    def slot(pair, team):
+        if pair not in stats:
+            stats[pair] = {
+                "pair": pair, "team": team,
+                "played": 0, "won": 0, "lost": 0,
+                "pf": 0, "pa": 0, "pts": 0,
+            }
+        return stats[pair]
+
+    h2h = {}  # (winner_pair, loser_pair) -> True
+    for m in matches:
+        if not (m.get("p1") and m.get("p2")):
+            continue
+        a = slot(m["p1"], m.get("t1"))
+        b = slot(m["p2"], m.get("t2"))
+        res = match_result(m, scores)
+        if not res["played"]:
+            continue
+        a["played"] += 1
+        b["played"] += 1
+        a["pf"] += res["pf1"]; a["pa"] += res["pf2"]
+        b["pf"] += res["pf2"]; b["pa"] += res["pf1"]
+        if res["winner"] == "p1":
+            a["won"] += 1; b["lost"] += 1
+            a["pts"] += 2
+            h2h[(m["p1"], m["p2"])] = True
+        elif res["winner"] == "p2":
+            b["won"] += 1; a["lost"] += 1
+            b["pts"] += 2
+            h2h[(m["p2"], m["p1"])] = True
+
+    teams = list(stats.values())
+    if not teams:
+        return []
+
+    def tiebreak_key(s):
+        return (-(s["pf"] - s["pa"]), -s["pf"], s["pa"])
+
+    # Bucket by match points, then resolve within each bucket.
+    teams.sort(key=lambda s: -s["pts"])
+    ordered = []
+    i = 0
+    while i < len(teams):
+        j = i
+        while j < len(teams) and teams[j]["pts"] == teams[i]["pts"]:
+            j += 1
+        bucket = teams[i:j]
+        if len(bucket) == 2:
+            x, y = bucket
+            if h2h.get((x["pair"], y["pair"])):
+                bucket = [x, y]
+            elif h2h.get((y["pair"], x["pair"])):
+                bucket = [y, x]
+            else:
+                bucket.sort(key=tiebreak_key)
+        else:
+            bucket.sort(key=tiebreak_key)
+        ordered.extend(bucket)
+        i = j
+
+    for rank, s in enumerate(ordered, start=1):
+        s["rank"] = rank
+        s["pd"] = s["pf"] - s["pa"]
+    return ordered
 
 # ----------------------------------------------------------------------------- styles
 st.markdown(
@@ -282,6 +469,37 @@ st.markdown(
         margin-left: -0.25rem;
         margin-right: -0.25rem;
         padding: 0.15rem 0.25rem;
+      }
+
+      .pair .sc {
+        background: #eef3ef;
+        border-radius: 6px;
+        color: var(--ink);
+        font-size: 0.82rem;
+        font-weight: 850;
+        margin-left: auto;
+        padding: 0.05rem 0.4rem;
+      }
+
+      .pair.winner {
+        color: var(--accent-strong);
+        font-weight: 850;
+      }
+
+      .pair.winner .sc {
+        background: var(--accent);
+        color: #ffffff;
+      }
+
+      .chip-foot .score {
+        color: var(--accent-strong);
+        font-weight: 800;
+      }
+
+      .chip-foot .no-score {
+        color: var(--soft);
+        font-style: italic;
+        font-weight: 650;
       }
 
       .dot {
@@ -567,7 +785,7 @@ st.markdown(
 st.markdown(legend_html(), unsafe_allow_html=True)
 
 
-def chip_html(m, highlight_team=None, highlight_player=None):
+def chip_html(m, highlight_team=None, highlight_player=None, result=None):
     accent = DISC_ACCENT.get(m["discipline"], "#90a4ae")
     soft = accent + "14"
     tag = f"{DISC_ABBR.get(m['discipline'], '?')} {m['stage']}"
@@ -582,14 +800,27 @@ def chip_html(m, highlight_team=None, highlight_player=None):
     selected_1 = " selected" if side_1_selected else ""
     selected_2 = " selected" if side_2_selected else ""
 
+    win_1 = win_2 = ""
+    sc_1 = sc_2 = ""
+    foot_score = "<span class='no-score'>Not played</span>"
+    if result and result.get("played"):
+        if result["winner"] == "p1":
+            win_1 = " winner"
+        elif result["winner"] == "p2":
+            win_2 = " winner"
+        # points scored by each side across all sets
+        sc_1 = f"<span class='sc'>{h(result['pf1'])}</span>"
+        sc_2 = f"<span class='sc'>{h(result['pf2'])}</span>"
+        foot_score = f"<span class='score'>{h(result['score_str'])}</span>"
+
     highlight = " highlight" if side_1_selected or side_2_selected else ""
     return (
         f"<div class='chip{highlight}' style='--chip-accent:{h(accent)}; --chip-soft:{h(soft)};'>"
         f"<div class='tag'>{h(tag)}</div>"
-        f"<div class='pair{selected_1}'><span class='dot' style='background:{h(c1)}'></span>{h(m['p1'])}</div>"
+        f"<div class='pair{selected_1}{win_1}'><span class='dot' style='background:{h(c1)}'></span>{h(m['p1'])}{sc_1}</div>"
         f"<div class='vs'>vs</div>"
-        f"<div class='pair{selected_2}'><span class='dot' style='background:{h(c2)}'></span>{h(m['p2'])}</div>"
-        f"<div class='chip-foot'><span>Court {h(m['court'])}</span></div>"
+        f"<div class='pair{selected_2}{win_2}'><span class='dot' style='background:{h(c2)}'></span>{h(m['p2'])}{sc_2}</div>"
+        f"<div class='chip-foot'><span>Court {h(m['court'])}</span>{foot_score}</div>"
         f"</div>"
     )
 
@@ -601,8 +832,14 @@ if pair_team != "All pairs":
 if stage != "All":
     head += f" - {stage}"
 
-tab_time, tab_grid, tab_list, tab_rules = st.tabs(
-    ["Timings", "Court Grid", "List", "Rules"]
+# Resolve the active score source: an uploaded file takes priority for this
+# session, otherwise read scores.xlsx / scores.csv sitting next to app.py.
+SCORES = st.session_state.get("uploaded_scores")
+if SCORES is None:
+    SCORES = load_scores()
+
+tab_time, tab_grid, tab_list, tab_stand, tab_rules = st.tabs(
+    ["Timings", "Court Grid", "List", "Standings", "Rules"]
 )
 
 # --- Timings (category + team focused) --------------------------------------
@@ -640,7 +877,7 @@ with tab_time:
                 for i, m in enumerate(ms):
                     hp = pair_team if pair_team != "All pairs" else None
                     inner[i % 3].markdown(
-                        chip_html(m, highlight_player=hp),
+                        chip_html(m, highlight_player=hp, result=match_result(m, SCORES)),
                         unsafe_allow_html=True,
                     )
 
@@ -682,7 +919,10 @@ with tab_grid:
                     cell = next((m for m in rs if m["court"] == court_no and m["start"] == start), None)
                     if cell:
                         hp = pair_team if pair_team != "All pairs" else None
-                        cols[idx + 1].markdown(chip_html(cell, highlight_player=hp), unsafe_allow_html=True)
+                        cols[idx + 1].markdown(
+                            chip_html(cell, highlight_player=hp, result=match_result(cell, SCORES)),
+                            unsafe_allow_html=True,
+                        )
                     else:
                         cols[idx + 1].markdown("<div class='empty'>Open</div>", unsafe_allow_html=True)
 
@@ -700,8 +940,20 @@ with tab_list:
     if not view:
         st.info("No matches for the selected filters.")
     else:
-        rows = [
-            {
+        def list_row(m):
+            res = match_result(m, SCORES)
+            if res["played"]:
+                if res["winner"] == "p1":
+                    won = f"{m['p1']}"
+                elif res["winner"] == "p2":
+                    won = f"{m['p2']}"
+                else:
+                    won = "Tie"
+                score = res["score_str"]
+            else:
+                won = ""
+                score = "—"
+            return {
                 "Day": m["day"],
                 "Session": m["session"],
                 "Time": f"{m['start_str']} - {m['end_str']}",
@@ -710,9 +962,11 @@ with tab_list:
                 "Stage": m["stage"],
                 "Match": f"{m['p1']} vs {m['p2']}",
                 "Teams": f"{m.get('t1') or 'TBD'} / {m.get('t2') or 'TBD'}",
+                "Score": score,
+                "Winner": won,
             }
-            for m in view
-        ]
+
+        rows = [list_row(m) for m in view]
         st.dataframe(
             rows,
             width="stretch",
@@ -721,8 +975,132 @@ with tab_list:
             column_config={
                 "Match": st.column_config.TextColumn("Match", width="large"),
                 "Teams": st.column_config.TextColumn("Teams", width="medium"),
+                "Score": st.column_config.TextColumn("Score", width="small"),
+                "Winner": st.column_config.TextColumn("Winner", width="medium"),
             },
         )
+# --- Standings --------------------------------------------------------------
+with tab_stand:
+    st.markdown(
+        (
+            "<div class='view-title'>"
+            "<h3>Group Standings</h3>"
+            f"<span class='match-count'>{h(len(SCORES))} matches scored</span>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("How to update scores", expanded=not SCORES):
+        st.markdown(
+            "1. **Download** the score sheet below — one row per match.\n"
+            "2. Fill in the set scores in Excel: `P1 S1`/`P2 S1` for the single "
+            "group set (use `S2`/`S3` columns too for best-of-3 knockouts).\n"
+            "3. Save it as **`scores.xlsx`** next to `app.py` (or upload it below "
+            "for a quick preview). For the deployed site, commit `scores.xlsx` "
+            "to the repo.\n"
+            "4. Standings, the **Score** column and the match cards update "
+            "automatically. Don't change the `match_id` column."
+        )
+        dl1, dl2 = st.columns(2)
+        dl1.download_button(
+            "⬇ Download score sheet (Excel)",
+            data=template_xlsx_bytes(),
+            file_name="scores.xlsx",
+            mime="application/vnd.openpyxlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )
+        dl2.download_button(
+            "⬇ Download score sheet (CSV)",
+            data=build_template_df().to_csv(index=False).encode("utf-8"),
+            file_name="scores.csv",
+            mime="text/csv",
+            width="stretch",
+        )
+
+        up = st.file_uploader(
+            "Preview a filled score sheet (.xlsx or .csv)", type=["xlsx", "csv"]
+        )
+        if up is not None:
+            try:
+                df_up = (
+                    pd.read_csv(up)
+                    if up.name.lower().endswith(".csv")
+                    else pd.read_excel(up, sheet_name=0)
+                )
+                st.session_state["uploaded_scores"] = parse_scores(df_up)
+                st.success(f"Loaded {up.name}. Showing scores from this file.")
+                st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.error(f"Could not read that file: {e}")
+        if st.session_state.get("uploaded_scores") is not None:
+            if st.button("Clear preview / use scores.xlsx on disk"):
+                del st.session_state["uploaded_scores"]
+                st.rerun()
+
+    if not SCORES:
+        st.info(
+            "No scores recorded yet. Download the score sheet above, fill it in, "
+            "and save it as scores.xlsx next to app.py."
+        )
+
+    # Standings per discipline -> per group (round-robin groups only).
+    GROUP_RANK = {"Group W": 0, "Group A": 1, "Group B": 2, "Group C": 3, "Group D": 4}
+    for disc in discs:
+        groups = sorted(
+            {
+                m["stage"]
+                for m in MATCHES
+                if m["discipline"] == disc and str(m["stage"]).startswith("Group")
+            },
+            key=lambda g: GROUP_RANK.get(g, 99),
+        )
+        if not groups:
+            continue
+        st.markdown(
+            f"<div class='sess-head'><small>Category</small>{h(disc)}</div>",
+            unsafe_allow_html=True,
+        )
+        cols = st.columns(min(len(groups), 2))
+        for gi, grp in enumerate(groups):
+            table = group_standings(disc, grp, SCORES)
+            target = cols[gi % len(cols)]
+            with target:
+                st.markdown(f"**{h(grp)}**")
+                if not table:
+                    st.caption("No pairs found for this group.")
+                    continue
+                rows = [
+                    {
+                        "#": s["rank"],
+                        "Pair": s["pair"],
+                        "Team": s["team"],
+                        "P": s["played"],
+                        "W": s["won"],
+                        "L": s["lost"],
+                        "PF": s["pf"],
+                        "PA": s["pa"],
+                        "PD": s["pd"],
+                        "Pts": s["pts"],
+                    }
+                    for s in table
+                ]
+                st.dataframe(
+                    rows,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "#": st.column_config.NumberColumn("#", width="small"),
+                        "Pair": st.column_config.TextColumn("Pair", width="large"),
+                        "Team": st.column_config.TextColumn("Team", width="small"),
+                    },
+                )
+    st.caption(
+        "P played · W won · L lost · PF points for · PA points against · "
+        "PD point difference · Pts = 2 per win. Ties broken by head-to-head "
+        "(2-way), then point difference, points for, then fewest conceded."
+    )
+
 # --- Rules ------------------------------------------------------------------
 with tab_rules:
     st.markdown(
