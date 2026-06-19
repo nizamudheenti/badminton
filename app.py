@@ -719,6 +719,98 @@ st.markdown(
         padding-top: 0.8rem;
       }
 
+      /* Rules tab */
+      .rules-intro {
+        color: var(--muted);
+        font-size: 0.95rem;
+        margin: 0.2rem 0 1rem;
+      }
+
+      .quick-grid {
+        display: grid;
+        gap: 0.7rem;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin: 0.4rem 0 1.4rem;
+      }
+
+      .quick-card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--accent);
+        border-radius: 10px;
+        box-shadow: 0 8px 22px rgba(16, 32, 28, 0.06);
+        padding: 0.8rem 0.9rem;
+      }
+
+      .quick-card .ico { font-size: 1.1rem; }
+
+      .quick-card .k {
+        color: var(--muted);
+        display: block;
+        font-size: 0.7rem;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        margin-top: 0.3rem;
+        text-transform: uppercase;
+      }
+
+      .quick-card .v {
+        color: var(--ink);
+        display: block;
+        font-size: 1rem;
+        font-weight: 850;
+        margin-top: 0.1rem;
+      }
+
+      .section-head {
+        color: var(--accent-strong);
+        font-size: 0.82rem;
+        font-weight: 850;
+        letter-spacing: 0.03em;
+        margin: 0.6rem 0 0.5rem;
+        text-transform: uppercase;
+      }
+
+      .div-grid {
+        display: grid;
+        gap: 0.8rem;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-bottom: 1.2rem;
+      }
+
+      .div-card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-top: 4px solid var(--dv);
+        border-radius: 10px;
+        box-shadow: 0 8px 22px rgba(16, 32, 28, 0.06);
+        padding: 0.95rem 1rem;
+      }
+
+      .div-card h4 {
+        color: var(--dv);
+        font-size: 1.02rem;
+        margin: 0 0 0.55rem;
+      }
+
+      .div-card .row {
+        border-top: 1px dashed var(--line);
+        display: flex;
+        font-size: 0.84rem;
+        gap: 0.5rem;
+        justify-content: space-between;
+        padding: 0.32rem 0;
+      }
+
+      .div-card .row:first-of-type { border-top: 0; }
+      .div-card .row .lbl { color: var(--muted); font-weight: 700; }
+      .div-card .row .val { color: var(--ink); font-weight: 800; text-align: right; }
+
+      @media (max-width: 760px) {
+        .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .div-grid { grid-template-columns: 1fr; }
+      }
+
       @media (max-width: 760px) {
         .hero {
           grid-template-columns: 1fr;
@@ -1166,139 +1258,110 @@ if tab_stand is not None:
 # --- Rules ------------------------------------------------------------------
 with tab_rules:
     st.markdown(
-        """
-# PPL Season 2 – Tournament Rules & Regulations
+        (
+            "<div class='view-title'><h3>Rules &amp; Regulations</h3>"
+            "<span class='match-count'>BWF rules apply</span></div>"
+            "<p class='rules-intro'>The essentials at a glance — tap any section "
+            "below for the full detail.</p>"
+            "<div class='quick-grid'>"
+            "<div class='quick-card'><span class='ico'>🔁</span>"
+            "<span class='k'>Group Stage</span><span class='v'>Single set to 21</span></div>"
+            "<div class='quick-card'><span class='ico'>🏆</span>"
+            "<span class='k'>Knockouts</span><span class='v'>Best of 3 sets</span></div>"
+            "<div class='quick-card'><span class='ico'>🎯</span>"
+            "<span class='k'>Scoring</span><span class='v'>Rally, win by 2</span></div>"
+            "<div class='quick-card'><span class='ico'>⏱️</span>"
+            "<span class='k'>Report</span><span class='v'>20 min early</span></div>"
+            "</div>"
+            "<div class='section-head'>Divisions &amp; path to the final</div>"
+            "<div class='div-grid'>"
+            "<div class='div-card' style='--dv:#2563EB'><h4>Men's</h4>"
+            "<div class='row'><span class='lbl'>Groups</span><span class='val'>4 groups</span></div>"
+            "<div class='row'><span class='lbl'>Qualify</span><span class='val'>Top 2 each &rarr; 8</span></div>"
+            "<div class='row'><span class='lbl'>Knockout</span><span class='val'>QF &rarr; SF &rarr; Final</span></div>"
+            "</div>"
+            "<div class='div-card' style='--dv:#C43B73'><h4>Women's</h4>"
+            "<div class='row'><span class='lbl'>Group</span><span class='val'>1 group of 5</span></div>"
+            "<div class='row'><span class='lbl'>1st place</span><span class='val'>Straight to Final</span></div>"
+            "<div class='row'><span class='lbl'>2nd vs 3rd</span><span class='val'>Semi-Final</span></div>"
+            "<div class='row'><span class='lbl'>Final</span><span class='val'>1st vs SF winner</span></div>"
+            "</div>"
+            "<div class='div-card' style='--dv:#15803D'><h4>Mixed</h4>"
+            "<div class='row'><span class='lbl'>Groups</span><span class='val'>2 groups</span></div>"
+            "<div class='row'><span class='lbl'>Qualify</span><span class='val'>Top 2 each &rarr; SF</span></div>"
+            "<div class='row'><span class='lbl'>Knockout</span><span class='val'>SF &rarr; Final</span></div>"
+            "</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
 
-## 1. Tournament Format
+    st.markdown("<div class='section-head'>Full rules</div>", unsafe_allow_html=True)
 
-The tournament consists of two stages:
+    with st.expander("🏟️  Format & group stage", expanded=True):
+        st.markdown(
+            "**Two stages:** Group Stage (round-robin) → Knockout Stage.\n\n"
+            "- Each team plays every other team in its group **once**.\n"
+            "- Group matches are a **single set to 21 points**.\n"
+            "- **Rally scoring** is used throughout the tournament."
+        )
 
-* Group Stage
-* Knockout Stage
+    with st.expander("🎯  Scoring system"):
+        st.markdown(
+            "1. **Rally scoring** — a point is awarded on every rally, regardless of who served.\n"
+            "2. A set is won at **21 points** with a **2-point lead**.\n"
+            "3. At **20–20**, play continues until a side leads by 2.\n"
+            "4. At **29–29**, the **next point decides** the set.\n"
+            "5. Knockout matches are **best of 3** — first to **2 sets** wins."
+        )
 
-All teams must adhere to the rules and regulations outlined below.
+    with st.expander("🏸  Service rules"):
+        st.markdown(
+            "1. Initial service is decided by a **coin toss**.\n"
+            "2. Serve must be **underhand**, shuttle struck **below the waist**.\n"
+            "3. **Both feet** must stay on the court until the shuttle is struck.\n"
+            "4. Deliberate distractions or feints may be ruled a **fault**.\n"
+            "5. Standard BWF service rules apply unless the Committee specifies otherwise."
+        )
 
+    with st.expander("⚖️  Tie-breaking criteria"):
+        st.markdown(
+            "When teams finish level on points, ranking is decided in order:\n\n"
+            "1. **Head-to-head** result\n"
+            "2. **Points difference** (scored − conceded)\n"
+            "3. **Total points scored**\n"
+            "4. **Fewest points conceded**\n\n"
+            "_If still tied, the Tournament Committee's decision is final._"
+        )
 
-## 2. Group Stage
+    with st.expander("⏱️  Attendance & walkovers"):
+        st.markdown(
+            "1. Matches start **strictly** to the published schedule.\n"
+            "2. Report ready to play **at least 20 minutes before** your match.\n"
+            "3. Failing to report on time may result in a **walkover**.\n"
+            "4. Inform the Committee of any exceptional circumstances immediately."
+        )
 
-1. Teams will compete in a round-robin format within their respective groups.
-2. Each team will play every other team in its group once.
-3. All Group Stage matches will be played as a **single set to 21 points**.
-4. Rally scoring will be used throughout the tournament.
+    with st.expander("🤝  Conduct & safety"):
+        st.markdown(
+            "- Display **good sportsmanship** and respect opponents, officials, and spectators.\n"
+            "- Unsporting conduct or abuse may bring **warnings, penalties, or disqualification**.\n"
+            "- Raise disputes through your **Team Captain** or the Committee.\n"
+            "- Wear proper attire and **non-marking footwear**; play at your own risk.\n"
+            "- Report any **injury** immediately; the Committee may pause or postpone for safety."
+        )
 
+    with st.expander("📋  General regulations"):
+        st.markdown(
+            "- **BWF rules** apply unless modified by these regulations.\n"
+            "- The Committee may interpret, amend, and enforce rules as needed.\n"
+            "- All Committee decisions are **final and binding**.\n"
+            "- Participation constitutes **acceptance** of all tournament rules."
+        )
 
-## 3. Qualification for Knockout Stages
-
-### Men's Division
-
-1. The Men's Division consists of **4 groups**.
-2. The **top 2 teams** from each group will qualify for the Quarter-Finals.
-3. A total of **8 teams** will advance to the Knockout Stage.
-
-### Women's Division
-
-1. The Women's Division consists of **1 group with 5 teams**.
-2. Each team will play every other team once.
-3. The team finishing **1st** in the standings will qualify directly for the **Final**.
-4. The teams finishing **2nd** and **3rd** will compete in a **Semi-Final**.
-5. The winner of the Semi-Final will advance to the **Final**.
-6. Teams finishing **4th** and **5th** will be eliminated.
-
-### Mixed Division
-
-1. The Mixed Division consists of **2 groups**.
-2. The **top 2 teams** from each group will qualify for the Semi-Finals.
-3. Semi-Final winners will advance to the Final.
-
-
-## 4. Knockout Stage
-
-### Men's Division
-
-* Quarter-Finals
-* Semi-Finals
-* Final
-
-### Women's Division
-
-* Semi-Final (2nd vs 3rd)
-* Final (1st vs Semi-Final Winner)
-
-### Mixed Division
-
-* Semi-Finals
-* Final
-
-All Knockout Stage matches will be played as **Best of 3 sets to 21 points**.
-
-
-## 5. Scoring System
-
-1. Rally scoring shall be used throughout the tournament.
-2. A point is awarded on every rally, regardless of which side served.
-3. A set is won by the first team to reach **21 points** with a minimum lead of **2 points**.
-4. If the score reaches **20–20**, play shall continue until one team gains a 2-point advantage.
-5. If the score reaches **29–29**, the next point shall decide the set.
-6. In Knockout Stage matches, the first team to win **2 sets** wins the match.
-
-
-## 6. Service Rules
-
-1. The initial service shall be decided by a coin toss.
-2. The serve must be delivered underhand, with the shuttle struck below the server's waist.
-3. Both feet of the server must remain in contact with the court surface until the shuttle is struck.
-4. Deliberate distractions, excessive movements, or actions intended to interfere with an opponent's readiness may be deemed faults.
-5. Standard badminton service rules shall apply unless otherwise specified by the Tournament Committee.
-
-
-## 7. Tie-Breaking Criteria
-
-If two or more teams finish the Group Stage with an equal number of points, rankings shall be determined in the following order:
-
-1. **Head-to-Head Result**
-2. **Points Difference** (Points Scored − Points Conceded)
-3. **Total Points Scored**
-4. **Lowest Points Conceded**
-
-The Tournament Committee's decision shall be final if teams remain tied after all criteria have been applied.
-
-
-## 8. Match Attendance & Walkovers
-
-1. All matches will begin strictly according to the published schedule.
-2. Players must report and be ready to play at least **20 minutes before** their scheduled match time.
-3. Failure to report on time may result in a **walkover**.
-4. Any exceptional circumstances must be communicated to the Tournament Committee immediately.
-
----
-
-## 9. Player Conduct & Sportsmanship
-
-1. Players are expected to display good sportsmanship at all times.
-2. Respect must be shown to opponents, officials, volunteers, and spectators.
-3. Unsporting conduct, abusive language, or inappropriate behavior may result in warnings, penalties, or disqualification.
-4. Any disputes should be raised through the Team Captain or Tournament Committee.
-
----
-
-## 10. Safety & Equipment
-
-1. Players must wear appropriate badminton attire and non-marking sports footwear.
-2. Players participate at their own risk and are responsible for ensuring they are physically fit to compete.
-3. Any injury sustained during the tournament must be reported immediately to the Tournament Committee.
-4. The Tournament Committee reserves the right to stop or postpone a match if player safety is at risk.
-
----
-
-## 11. General Regulations
-
-1. Standard Badminton World Federation (BWF) rules shall apply unless specifically modified by these tournament regulations.
-2. The Tournament Committee reserves the right to interpret, amend, and enforce these rules whenever necessary.
-3. Any decision made by the Tournament Committee shall be final and binding.
-4. Participation in the tournament constitutes acceptance of all tournament rules and regulations.
-
----
-
-### 🏸 Play Fair • Play Hard • Enjoy the Tournament"""
+    st.markdown(
+        "<p style='text-align:center;font-weight:850;color:var(--accent-strong);"
+        "margin-top:1rem'>🏸 Play Fair · Play Hard · Enjoy the Tournament</p>",
+        unsafe_allow_html=True,
     )
 st.markdown("<div class='footer-note'>PPL Season 2 - Badminton</div>", unsafe_allow_html=True)
